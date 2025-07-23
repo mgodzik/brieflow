@@ -395,6 +395,59 @@ def align_between_cycles(
         return aligned
 
 
+def align_seg_to_sbs(
+    seg_stack,
+    ref_dapi,
+    dapi_index=0,
+    upsample_factor=2,
+    window=2,
+):
+    """Align an external segmentation stack to the SBS coordinate frame.
+
+    The function builds a pseudo two-cycle stack where the first "cycle" is the
+    reference DAPI copied across all channels and the second "cycle" is the
+    segmentation image stack. It then reuses :func:`align_between_cycles` to
+    estimate the translation that aligns the segmentation DAPI channel to the
+    SBS reference and applies the same shift to all channels in
+    ``seg_stack``.
+
+    Args:
+        seg_stack (np.ndarray): Segmentation image stack with shape
+            ``(CHANNEL, Y, X)``.
+        ref_dapi (np.ndarray): Aligned SBS DAPI image with shape ``(Y, X)``.
+        dapi_index (int, optional): Index of the DAPI channel inside
+            ``seg_stack``. Defaults to 0.
+        upsample_factor (int, optional): Subpixel registration factor passed to
+            :func:`calculate_offsets`. Defaults to 2.
+        window (int or float, optional): Window size used during
+            cross-correlation. Defaults to 2.
+
+    Returns:
+        np.ndarray: ``seg_stack`` rigidly aligned to the SBS reference with the
+        same shape as the input.
+    """
+
+    # 1) Build pseudo two-cycle stack: [reference, segmentation]
+    pseudo = np.stack(
+        [
+            np.stack([ref_dapi] * seg_stack.shape[0]),
+            seg_stack,
+        ],
+        axis=0,
+    )
+
+    # 2) Align the two "cycles" using the DAPI channel
+    aligned_pair = align_between_cycles(
+        pseudo,
+        channel_index=dapi_index,
+        upsample_factor=upsample_factor,
+        window=window,
+    )
+
+    # 3) Return only the aligned segmentation stack (second cycle)
+    return aligned_pair[1]
+
+
 def manual_fill_channels(
     image_data,
     current_channel_orders,

@@ -51,6 +51,9 @@ sbs:
   gpu: false
   reconcile: contained_in_cells
   segment_cells: true
+  use_segmentation_images: false
+  segmentation_upsample_factor: 2
+  segmentation_window: 2
   df_barcode_library_fp: config/barcode_library.tsv
   threshold_peaks: 400
   call_reads_method: median
