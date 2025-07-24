@@ -24,6 +24,27 @@ rule align_sbs:
         "../scripts/sbs/align_cycles.py"
 
 
+# Align external segmentation images to the SBS reference
+rule align_segmentation:
+    input:
+        lambda wildcards: output_to_input(
+            PREPROCESS_OUTPUTS["convert_segmentation"],
+            wildcards=wildcards,
+            metadata_combos=segmentation_wildcard_combos,
+            ancient_output=True,
+        ),
+        SBS_OUTPUTS["align_sbs"],
+    output:
+        SBS_OUTPUTS_MAPPED["align_segmentation"],
+    params:
+        dapi_cycle=config["sbs"]["dapi_cycle"],
+        dapi_index=config["sbs"]["dapi_index"],
+        upsample_factor=config["sbs"].get("segmentation_upsample_factor", 2),
+        window=config["sbs"].get("segmentation_window", 2),
+    script:
+        "../scripts/sbs/align_segmentation_to_sbs.py"
+
+
 # Apply Laplacian-of-Gaussian filter to all channels
 rule log_filter:
     input:
@@ -134,8 +155,13 @@ rule apply_ic_field_segmentation:
 # Segments cells and nuclei using pre-defined methods
 rule segment_sbs:
     input:
+<<<<<<< HEAD
         SBS_OUTPUTS["apply_ic_field_segmentation"]
         if config["sbs"].get("use_segmentation_images", "sbs") == "true"
+=======
+        lambda wildcards: SBS_OUTPUTS["align_segmentation"]
+        if config["sbs"].get("use_segmentation_images", False)
+>>>>>>> mgodzik/add_segmentation
         else SBS_OUTPUTS["apply_ic_field_sbs"],
     output:
         SBS_OUTPUTS_MAPPED["segment_sbs"],
