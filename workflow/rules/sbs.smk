@@ -135,7 +135,7 @@ rule apply_ic_field_segmentation:
 rule segment_sbs:
     input:
         SBS_OUTPUTS["apply_ic_field_segmentation"]
-        if config["sbs"].get("segmentation_source", "sbs") == "external"
+        if config["sbs"].get("use_segmentation_images", "sbs") == "true"
         else SBS_OUTPUTS["apply_ic_field_sbs"],
     output:
         SBS_OUTPUTS_MAPPED["segment_sbs"],
