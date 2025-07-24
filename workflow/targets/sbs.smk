@@ -12,6 +12,24 @@ SBS_OUTPUTS = {
             {"plate": "{plate}", "well": "{well}", "tile": "{tile}"}, "aligned", "tiff"
         ),
     ],
+    "align_segmentation": [
+        SBS_FP
+        / "images"
+        / get_filename(
+            {"plate": "{plate}", "well": "{well}", "tile": "{tile}"},
+            "segmentation_aligned",
+            "tiff",
+        ),
+    ],
+    "apply_ic_field_segmentation": [
+        SBS_FP
+        / "images"
+        / get_filename(
+            {"plate": "{plate}", "well": "{well}", "tile": "{tile}"},
+            "segmentation_ic",
+            "tiff",
+        ),
+    ],
     "log_filter": [
         SBS_FP
         / "images"
@@ -177,6 +195,8 @@ SBS_OUTPUTS = {
 
 SBS_OUTPUT_MAPPINGS = {
     "align_sbs": temp,
+    "align_segmentation": temp,
+    "apply_ic_field_segmentation": temp,
     "log_filter": temp,
     "compute_standard_deviation": temp,
     "find_peaks": temp,
