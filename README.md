@@ -103,6 +103,18 @@ Only the `slurm` plugin has been tested. It is important to understand that thes
 The [denali-analysis](https://github.com/cheeseman-lab/denali-analysis) details an example Brieflow run.
 We do not include the data necessary for this example analysis in this repo as it is too large.
 
+### Aligning segmentation images
+
+External segmentation images can be registered to the SBS coordinate frame using
+`align_seg_to_sbs`:
+
+```python
+from lib.sbs.align_cycles import align_seg_to_sbs
+
+ref_dapi = aligned_sbs[0, 0]
+seg_aligned = align_seg_to_sbs(segment_stack, ref_dapi, dapi_index=0)
+```
+
 ## Contribution Notes
 
 - Brieflow is still actively under development and we welcome community use/development. 

@@ -127,11 +127,41 @@ rule apply_ic_field_sbs:
         "../scripts/sbs/apply_ic_field_sbs.py"
 
 
+# Align external segmentation images to the SBS coordinate frame
+rule align_segmentation_to_sbs:
+    input:
+        PREPROCESS_OUTPUTS["convert_segmentation"],
+        SBS_OUTPUTS["align_sbs"],
+    output:
+        SBS_OUTPUTS_MAPPED["align_segmentation"],
+    params:
+        dapi_index=config["sbs"]["dapi_index"],
+        upsample_factor=config["sbs"].get("seg_align_upsample_factor", 2),
+        window=config["sbs"].get("seg_align_window", 2),
+    script:
+        "../scripts/sbs/align_segmentation_to_sbs.py"
+
+# Apply illumination correction to the aligned segmentation images
+rule apply_ic_field_segmentation:
+    input:
+        SBS_OUTPUTS["align_segmentation"],
+        ancient(PREPROCESS_OUTPUTS["calculate_ic_segmentation"]),
+    output:
+        SBS_OUTPUTS_MAPPED["apply_ic_field_segmentation"],
+    script:
+        "../scripts/sbs/apply_ic_field_segmentation.py"
+
+
 # Segments cells and nuclei using pre-defined methods
 rule segment_sbs:
     input:
+<<<<<<< HEAD
+        SBS_OUTPUTS["apply_ic_field_segmentation"]
+        if config["sbs"].get("use_segmentation_images", "sbs") == "true"
+=======
         lambda wildcards: SBS_OUTPUTS["align_segmentation"]
         if config["sbs"].get("use_segmentation_images", False)
+>>>>>>> mgodzik/add_segmentation
         else SBS_OUTPUTS["apply_ic_field_sbs"],
     output:
         SBS_OUTPUTS_MAPPED["segment_sbs"],

@@ -184,7 +184,10 @@ def standardize_barcode_design(
 
     # Add UniProt annotation
     df = add_uniprot_annotation(df, uniprot_data_path, verbose=verbose)
-
+    if "gene_id" not in df.columns:
+        df["gene_id"] = df["uniprot_entry"]
+    
+    
     # Check that genes were successfully annotated (excluding non-targeting controls)
     regular_genes = df[~df["gene_symbol"].str.startswith("nontargeting_", na=False)]
     if len(regular_genes) > 0:

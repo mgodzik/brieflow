@@ -21,6 +21,18 @@ SBS_OUTPUTS = {
             "tiff",
         ),
     ],
+<<<<<<< HEAD
+    "apply_ic_field_segmentation": [
+        SBS_FP
+        / "images"
+        / get_filename(
+            {"plate": "{plate}", "well": "{well}", "tile": "{tile}"},
+            "segmentation_ic",
+            "tiff",
+        ),
+    ],
+=======
+>>>>>>> mgodzik/add_segmentation
     "log_filter": [
         SBS_FP
         / "images"
@@ -187,6 +199,10 @@ SBS_OUTPUTS = {
 SBS_OUTPUT_MAPPINGS = {
     "align_sbs": temp,
     "align_segmentation": temp,
+<<<<<<< HEAD
+    "apply_ic_field_segmentation": temp,
+=======
+>>>>>>> mgodzik/add_segmentation
     "log_filter": temp,
     "compute_standard_deviation": temp,
     "find_peaks": temp,
