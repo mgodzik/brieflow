@@ -155,13 +155,8 @@ rule apply_ic_field_segmentation:
 # Segments cells and nuclei using pre-defined methods
 rule segment_sbs:
     input:
-<<<<<<< HEAD
         SBS_OUTPUTS["apply_ic_field_segmentation"]
         if config["sbs"].get("use_segmentation_images", "sbs") == "true"
-=======
-        lambda wildcards: SBS_OUTPUTS["align_segmentation"]
-        if config["sbs"].get("use_segmentation_images", False)
->>>>>>> mgodzik/add_segmentation
         else SBS_OUTPUTS["apply_ic_field_sbs"],
     output:
         SBS_OUTPUTS_MAPPED["segment_sbs"],
