@@ -160,6 +160,9 @@ rule segment_sbs:
         else SBS_OUTPUTS["apply_ic_field_sbs"],
     output:
         SBS_OUTPUTS_MAPPED["segment_sbs"],
+    resources:
+        gpu=1,
+        gpu_mem=config["sbs"].get("gpu_mem", 1),
     params:
         config=lambda wildcards: get_segmentation_params("sbs", config),
     script:

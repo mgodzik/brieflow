@@ -98,6 +98,31 @@ These can be adjusted as necessary.
 **Note**: Other Snakemake HPC integrations can be found in the [Snakemake plugin catalog](https://snakemake.github.io/snakemake-plugin-catalog/index.html#snakemake-plugin-catalog).
 Only the `slurm` plugin has been tested. It is important to understand that these plugins assume that the Snakemake scheduler will operate on the head HPC node, and *only the individual jobs* are submitted to the various nodes available to the HPC. Therefore, the Snakefile should be run through bash on the head node (with `slurm` or other HPC configurations). We recommend starting a tmux session for this, especially for larger jobs.
 
+### GPU Scheduling
+
+Rules that rely on GPU acceleration declare the `gpu` resource.
+Specify the total number of GPUs when invoking Snakemake so these rules run concurrently without oversubscription:
+
+```sh
+snakemake --resources gpu=2
+```
+
+Enable GPU usage in the module configuration with `gpu: true`.
+Snakemake sets `CUDA_VISIBLE_DEVICES` for each job, allowing segmentation steps like Cellpose to run on the assigned device.
+
+Some segmentation rules also request a `gpu_mem` resource to approximate
+per-job VRAM demand.  Phenotype segmentation defaults to twice the
+memory requirement of SBS segmentation.  Provide the total available
+GPU memory when launching Snakemake so it can stagger jobs accordingly:
+
+```sh
+snakemake --resources gpu=8 gpu_mem=192  # eight GPUs, 24 GB each
+```
+
+Adjust the `gpu_mem` values in your configuration if your hardware has a
+different VRAM budget or if certain steps are more memory hungry.
+
+
 ## Example Analysis
 
 The [denali-analysis](https://github.com/cheeseman-lab/denali-analysis) details an example Brieflow run.

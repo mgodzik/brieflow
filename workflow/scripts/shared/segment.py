@@ -1,6 +1,7 @@
 from tifffile import imread, imwrite
 import numpy as np
 import pandas as pd
+import os
 
 # Load illumination corrected data
 aligned_data = imread(snakemake.input[0])
@@ -11,6 +12,16 @@ params = snakemake.params.config
 # Choose segmentation method based on parameter
 method = params.get("segmentation_method", "cellpose")
 segment_cells = params.get("segment_cells", True)
+
+# If GPU usage is enabled, derive the device from the environment.
+if params.get("gpu") is True:
+    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cuda_visible is not None:
+        if method == "cellpose":
+            params["gpu"] = int(cuda_visible.split(",")[0]) + 1
+        else:
+            params["gpu"] = True
+
 
 if method == "cellpose":
     # Segment cells using cellpose

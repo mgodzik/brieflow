@@ -31,6 +31,9 @@ rule segment_phenotype:
         PHENOTYPE_OUTPUTS["align_phenotype"],
     output:
         PHENOTYPE_OUTPUTS_MAPPED["segment_phenotype"],
+    resources:
+        gpu=1,
+        gpu_mem=config["phenotype"].get("gpu_mem", 2),
     params:
         config=lambda wildcards: get_segmentation_params("phenotype", config),
     script:
