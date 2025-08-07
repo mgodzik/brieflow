@@ -18,6 +18,7 @@ import pandas as pd
 from collections import defaultdict
 
 from cellpose.models import Cellpose
+from cellpose.core import assign_device
 from skimage.util import img_as_ubyte
 from skimage.measure import regionprops
 from skimage.segmentation import clear_border
@@ -270,7 +271,8 @@ def segment_cellpose_rgb(
         reconcile (str, optional): Method for reconciling nuclei and cells. Default is 'consensus'.
         remove_edges (bool, optional): Whether to remove nuclei and cells touching the image edges. Default is True.
         return_counts (bool, optional): Whether to return counts of nuclei and cells before reconciliation. Default is False.
-        gpu (bool, optional): Whether to use GPU for segmentation. Default is False.
+        gpu (bool or int, optional): Whether to use GPU for segmentation. Default is False. 
+        If not False, interpreted as an integer label for which device, where 1 is device index 0, 2 is device index 1, etc.
         nuclei_kwargs (dict, optional): Specific parameters for nuclei segmentation. Default is None.
         cell_kwargs (dict, optional): Specific parameters for cell segmentation. Default is None.
         kwargs: Additional keyword arguments applied to both nuclei and cell segmentation if specific kwargs not provided.
@@ -281,9 +283,16 @@ def segment_cellpose_rgb(
             - cells (numpy.ndarray): Labeled segmentation mask of cell boundaries.
             - (optional) counts (dict): Counts of nuclei and cells at different stages if return_counts is True.
     """
+    # determine which GPU device (if there is more than one)
+    gpu_device = None
+    if gpu != False:
+        gpu_device = assign_device(gpu=True, device = int(gpu)-1)[0]
+    
     # Instantiate Cellpose models for nuclei and cytoplasmic segmentation
-    model_dapi = Cellpose(model_type="nuclei", gpu=gpu)
-    model_cyto = Cellpose(model_type=cyto_model, gpu=gpu)
+    model_dapi = Cellpose(model_type="nuclei", gpu=gpu, device=gpu_device)
+    model_cyto = Cellpose(model_type=cyto_model, gpu=gpu, device=gpu_device)
+
+    # set which GPU to use if there is more than one
 
     # Set default kwargs if not provided
     if nuclei_kwargs is None:

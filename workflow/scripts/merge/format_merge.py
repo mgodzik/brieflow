@@ -29,13 +29,10 @@ sbs_cells["mapped_single_gene"] = sbs_cells.apply(
 merge_formatted = merge_formatted.merge(
     sbs_cells[
         [
-            "plate",
-            "well",
-            "tile",
-            "cell",
-            "sgRNA_0",
-            "gene_symbol_0",
-            "mapped_single_gene",
+            "plate", "well", "tile", "cell", 'cell_barcode_0',
+            'cell_barcode_count_0', 'cell_barcode_1', 'cell_barcode_count_1',
+            'barcode_count', "sgRNA_0", "gene_symbol_0", "mapped_single_gene",
+            "cell_UMI_0", "cell_UMI_1", "cell_UMI_count_0", "cell_UMI_count_1", "UMI_count",
         ]
     ].rename({"tile": "site", "cell": "cell_1"}, axis=1),
     how="left",

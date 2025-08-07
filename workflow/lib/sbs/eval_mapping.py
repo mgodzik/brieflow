@@ -255,7 +255,8 @@ def plot_cell_mapping_heatmap(
             Expected barcodes from the pool library design.
         mapping_to (str):
             Cells to include as 'mapped'. 'one' only includes cells mapping to a single barcode, 'any' includes cells
-            mapping to at least 1 barcode. Options are {'one', 'any'}.
+            mapping to at least 1 barcode. 'consensus' only includes cells where the top barcode read count is more than
+            2X the next most frequent barcode read_count. Options are {'one', 'any','consensus'}.
         mapping_strategy (str): Strategy to use for mapping cells. Options are {'barcodes', 'gene symbols'}.
         shape (str, optional):
             Shape of subplot for each well used in plot_plate_heatmap. Defaults to 'square'.
@@ -287,10 +288,11 @@ def plot_cell_mapping_heatmap(
 
     # Merge cell mapping information with sbs info
     df = df_sbs_info[["well", "tile", "cell"]].merge(
-        df_cells[["well", "tile", "cell", "mapped_0", "mapped_1"]],
+        df_cells[["well", "tile", "cell", "mapped_0", "mapped_1",
+                  "cell_barcode_count_0", "cell_barcode_count_1", "barcode_count"]],
         how="left",
         on=["well", "tile", "cell"],
-    )
+    ).fillna(0)
 
     # Determine mapping criteria and calculate mapping rates
     if mapping_to == "one":
@@ -299,6 +301,10 @@ def plot_cell_mapping_heatmap(
     elif mapping_to == "any":
         metric = f"fraction of cells mapping to >=1 {mapping_strategy}"
         df = df.assign(mapped=lambda x: x[["mapped_0", "mapped_1"]].sum(axis=1) > 0)
+    elif mapping_to == "consensus":
+        metric = f"fraction of cells consensus mapping to 1 {mapping_strategy}"
+        df = df.assign(mapped=lambda x: ( (x["mapped_0"] == 1) &\
+            ( x["cell_barcode_count_0"] > (2 * x["cell_barcode_count_1"]) ) ) )
     else:
         raise ValueError(f"mapping_to={mapping_to} not implemented")
 
