@@ -2,12 +2,18 @@ from tifffile import imread, imwrite
 import numpy as np
 import pandas as pd
 import os
+from lib.shared.gpu_utils import reserve_gpu
 
 # Load illumination corrected data
 aligned_data = imread(snakemake.input[0])
 
 # Get configuration from params
 params = snakemake.params.config
+required_mem_mb = params.get("required_mem_mb")
+
+with reserve_gpu(required_mem_mb) as gpu_id:
+    if gpu_id is not None:
+        params["gpu"] = gpu_id + 1  # Cellpose expects 1-based device ids
 
 # Choose segmentation method based on parameter
 method = params.get("segmentation_method", "cellpose")

@@ -145,6 +145,7 @@ def get_segmentation_params(module, config):
         "reconcile": module_config.get("reconcile", False),
         "return_counts": module_config.get("return_counts", True),
         "gpu": module_config.get("gpu", False),
+        "gpu_mem_mb": module_config.get("gpu_mem_mb", 0),
         "segment_cells": module_config.get("segment_cells", True),
     }
 
