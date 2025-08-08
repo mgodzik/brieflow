@@ -1,71 +1,214 @@
-# GPU utility functions for reserving CUDA devices based on free memory.
+"""Utility functions for reserving a GPU device.
+
+The original implementation reserved a GPU by setting the
+``CUDA_VISIBLE_DEVICES`` environment variable.  This would hide all other
+devices from the current process.  In order to cooperate better with code
+that expects all devices to be visible, the active device is now selected
+directly via :func:`torch.cuda.set_device` while leaving the visibility
+of the remaining devices untouched.
+
+The function :func:`_reserve_gpu` keeps the lock acquisition logic of the
+previous version.  Each GPU device is protected by a lock file which
+prevents concurrent reservation from multiple processes.  When a device
+with sufficient free memory is found, it is set as the active device and
+the lock is held until the interpreter exits.  Devices are considered in
+random order to spread allocations across GPUs.
+"""
 
 from __future__ import annotations
 
-import os
-from contextlib import contextmanager
-from typing import Optional
+import atexit
+import random
+import tempfile
+import time
+from pathlib import Path
+from typing import Dict
 
-import torch
+from filelock import FileLock, Timeout
+
+# keep references to locks for the lifetime of the process so that they
+# are not garbage collected and released prematurely
+_GPU_LOCKS: Dict[int, FileLock] = {}
 
 
-@contextmanager
-def reserve_gpu(required_mem_mb: int, lock_dir: str = "/tmp/gpu_locks"):
-    """Reserve a GPU device with at least ``required_mem_mb`` free memory.
+def _lock_path(dev_id: int) -> Path:
+    """Return the path to the lock file for ``dev_id``.
 
-    This function enumerates all visible CUDA devices and selects the first one
-    that satisfies the requested free memory. A simple file based lock is used
-    to avoid multiple processes reserving the same device concurrently.
+    The lock files are stored inside the system temporary directory.
+    """
+    lock_dir = Path(tempfile.gettempdir()) / "gpu_locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    return lock_dir / f"gpu{dev_id}.lock"
 
-    Args:
-        required_mem_mb: Minimum amount of free memory required (in megabytes).
-        lock_dir: Directory where lock files will be created.
 
-    Yields:
-        Optional[int]: The id of the reserved CUDA device. ``None`` if no
-        device satisfies ``required_mem_mb``.
+def _release_gpu(dev_id: int) -> None:
+    """Release the lock for ``dev_id`` if it is held."""
+    lock = _GPU_LOCKS.pop(dev_id, None)
+    if lock is not None and lock.is_locked:
+        try:
+            lock.release()
+        except Exception:
+            pass
+
+
+def _reserve_gpu(
+    min_free_mem: int = 0,
+    lock_timeout: int | float = 3600,
+    check_interval: int | float = 1,
+    recheck_interval: int | float = 60,
+) -> int:
+    """Reserve a GPU with at least ``min_free_mem`` free bytes.
+
+    This function iterates over all visible CUDA devices in random order
+    and tries to acquire an exclusive lock for each one.  When a device is found that
+    satisfies the free memory constraint, it is set as the active device via
+    :func:`torch.cuda.set_device` and the lock is registered for cleanup via
+    :mod:`atexit`.
+
+    The previous behaviour of hiding other devices by setting the
+    ``CUDA_VISIBLE_DEVICES`` environment variable has been removed.
+
+    Parameters
+    ----------
+    min_free_mem:
+        The minimum amount of free memory in bytes required on the device.
+    lock_timeout:
+        Maximum time in seconds to wait for a free GPU.  A value of ``0``
+        means to retry indefinitely.
+    check_interval:
+        Time in seconds to wait between successive scans of all devices.
+    recheck_interval:
+        Unused placeholder kept for backwards compatibility.
+
+    Returns
+    -------
+    int
+        The device id of the reserved GPU.
+
+    Raises
+    ------
+    RuntimeError
+        If no suitable GPU is found before ``lock_timeout`` expires.
     """
 
-    os.makedirs(lock_dir, exist_ok=True)
-    original_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    import importlib
 
-    for dev_id in range(torch.cuda.device_count()):
-        lock_path = os.path.join(lock_dir, f"gpu{dev_id}.lock")
-        try:
-            # try to exclusively create the lock file
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-        except FileExistsError:
-            # another process holds the lock
-            continue
+    torch = importlib.import_module("torch")
 
-        try:
-            with torch.cuda.device(dev_id):
-                free_bytes, _ = torch.cuda.mem_get_info()
-            free_mb = free_bytes // (1024 * 1024)
-            if free_mb < required_mem_mb:
-                # not enough memory, release lock and continue
-                os.close(fd)
-                os.remove(lock_path)
+    start = time.time()
+    deadline = None if lock_timeout == 0 else start + lock_timeout
+
+    while True:
+        dev_ids = list(range(torch.cuda.device_count()))
+        random.shuffle(dev_ids)
+        for dev_id in dev_ids:
+            lock = FileLock(str(_lock_path(dev_id)))
+            try:
+                lock.acquire(timeout=0)
+            except Timeout:
                 continue
 
-            # Reserve this device by setting the environment variable so that
-            # downstream libraries only see the selected GPU.
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(dev_id)
             try:
-                yield dev_id
+                free_mem, _ = torch.cuda.mem_get_info(dev_id)
+                if free_mem >= min_free_mem:
+                    torch.cuda.set_device(dev_id)
+                    _GPU_LOCKS[dev_id] = lock
+                    atexit.register(_release_gpu, dev_id)
+                    return dev_id
             finally:
-                os.close(fd)
-                os.remove(lock_path)
-                if original_visible is None:
-                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-                else:
-                    os.environ["CUDA_VISIBLE_DEVICES"] = original_visible
-            return
-        except Exception:
-            # in case something goes wrong ensure we clean up
-            os.close(fd)
-            os.remove(lock_path)
-            raise
+                # Release the lock if the device was not selected.
+                if dev_id not in _GPU_LOCKS:
+                    lock.release()
 
-    # no device satisfied the requirement
-    yield None
+        if deadline is not None and time.time() > deadline:
+            raise RuntimeError("No GPU with sufficient memory available")
+
+        time.sleep(check_interval)
+
+
+__all__ = ["_reserve_gpu", "_release_gpu"]
+
+# import os
+# import random
+# import atexit
+# import tempfile
+# from pathlib import Path
+
+# import torch
+
+# LOCK_DIR = Path(tempfile.gettempdir()) / "brieflow-gpu-locks"
+# LOCK_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# def _lock_path(dev_id: int) -> Path:
+#     """Return the lock file path for a given device id."""
+#     return LOCK_DIR / f"gpu_{dev_id}.lock"
+
+
+# def _acquire_lock(dev_id: int):
+#     """Try to acquire a lock for the given GPU device.
+
+#     Returns a file descriptor if the lock was acquired, otherwise ``None``.
+#     """
+#     lock = _lock_path(dev_id)
+#     try:
+#         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+#     except FileExistsError:
+#         return None
+#     os.write(fd, str(os.getpid()).encode())
+#     return fd
+
+
+# def _release_lock(dev_id: int, fd: int) -> None:
+#     """Release the lock for ``dev_id``."""
+#     os.close(fd)
+#     try:
+#         os.remove(_lock_path(dev_id))
+#     except FileNotFoundError:
+#         pass
+
+
+# def _register_cleanup(dev_id: int, fd: int) -> None:
+#     """Register cleanup handler for the lock."""
+#     def _cleanup():
+#         _release_lock(dev_id, fd)
+#     atexit.register(_cleanup)
+
+
+# def _reserve_gpu(min_free_mem: int = 0) -> int:
+#     """Reserve a GPU with at least ``min_free_mem`` free memory.
+
+#     Returns the device id and sets ``CUDA_VISIBLE_DEVICES`` so the process
+#     sees only the selected device.
+#     """
+#     if torch.cuda.device_count() == 0:
+#         raise RuntimeError("No CUDA devices available")
+
+#     device_ids = list(range(torch.cuda.device_count()))
+#     random.shuffle(device_ids)
+
+#     for dev_id in device_ids:
+#         fd = _acquire_lock(dev_id)
+#         if fd is None:
+#             continue
+#         try:
+#             try:
+#                 torch.cuda.set_device(dev_id)
+#                 free_mem, _ = torch.cuda.mem_get_info()
+#             except Exception:
+#                 free_mem = 0
+#             if free_mem >= min_free_mem:
+#                 os.environ["CUDA_VISIBLE_DEVICES"] = str(dev_id)
+#                 _register_cleanup(dev_id, fd)
+#                 return dev_id
+#         finally:
+#             # If we didn't return, release the lock immediately
+#             if _lock_path(dev_id).exists() and os.environ.get("CUDA_VISIBLE_DEVICES") != str(dev_id):
+#                 _release_lock(dev_id, fd)
+#     raise RuntimeError("No GPU with enough free memory available")
+
+
+# # Public aliases for compatibility with potential callers
+# reserve_gpu = _reserve_gpu
+# acquire_gpu = _reserve_gpu
+# get_free_gpu = _reserve_gpu
