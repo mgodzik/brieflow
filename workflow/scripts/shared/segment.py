@@ -174,9 +174,8 @@ def perform_segmentation(gpu_flag):
 
 if params.get("gpu", False):
     device_id = _reserve_gpu(params.get("gpu_mem_mb", 0))
-    gpu_flag = device_id is not None
-    torch.cuda.set_device(gpu_flag)
-    nuclei_data, cells_data, counts_df = perform_segmentation(gpu_flag)
+    torch.cuda.set_device(device_id)
+    nuclei_data, cells_data, counts_df = perform_segmentation(device_id+1)
 else:
     nuclei_data, cells_data, counts_df = perform_segmentation(False)
  

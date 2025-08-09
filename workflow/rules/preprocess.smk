@@ -180,6 +180,8 @@ rule calculate_ic_sbs:
     params:
         threading=True,
         sample_fraction=config["preprocess"]["sample_fraction"],
+    resources:
+        mem_mb=100000,
     script:
         "../scripts/preprocess/calculate_ic_field.py"
 
@@ -198,6 +200,8 @@ rule calculate_ic_phenotype:
     params:
         threading=True,
         sample_fraction=config["preprocess"]["sample_fraction"],
+    resources:
+        mem_mb=190000,
     script:
         "../scripts/preprocess/calculate_ic_field.py"
 

@@ -19,36 +19,69 @@ from __future__ import annotations
 
 import atexit
 import random
+import json
 import tempfile
 import time
 from pathlib import Path
 from typing import Dict
+import fcntl
+import torch
 
-from filelock import FileLock, Timeout
+# from filelock import FileLock, Timeout
 
 # keep references to locks for the lifetime of the process so that they
 # are not garbage collected and released prematurely
-_GPU_LOCKS: Dict[int, FileLock] = {}
+# _GPU_LOCKS: Dict[int, FileLock] = {}
+
+#     The lock files are stored inside the system temporary directory.
+#     """
+#     lock_dir = Path(tempfile.gettempdir()) / "gpu_locks"
+#     lock_dir.mkdir(parents=True, exist_ok=True)
+#     return lock_dir / f"gpu{dev_id}.lock"
+
+# def _release_gpu(dev_id: int) -> None:
+# """Release the lock for ``dev_id`` if it is held."""
+# lock = _GPU_LOCKS.pop(dev_id, None)
+# if lock is not None and lock.is_locked:
+#     try:
+#         lock.release()
+#     except Exception:
+#         pass
+# """Release the ledger entry for ``dev_id`` if it exists."""
+# reserved = _GPU_RESERVATIONS.pop(dev_id, None)
+# if reserved is None:
+#     return
+
+# Track memory reservations (in MB) made by this process.
+_GPU_RESERVATIONS: Dict[int, int] = {}
+
+# Path to the ledger file coordinating reservations across processes.
+LEDGER_PATH = Path(tempfile.gettempdir()) / "gpu_ledger.json"
 
 
-def _lock_path(dev_id: int) -> Path:
-    """Return the path to the lock file for ``dev_id``.
+def _read_ledger(file_obj):
+    file_obj.seek(0)
+    try:
+        return json.load(file_obj)
+    except Exception:
+        return {}
 
-    The lock files are stored inside the system temporary directory.
-    """
-    lock_dir = Path(tempfile.gettempdir()) / "gpu_locks"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    return lock_dir / f"gpu{dev_id}.lock"
+
+def _write_ledger(file_obj, data):
+    file_obj.seek(0)
+    file_obj.truncate()
+    json.dump(data, file_obj)
+    file_obj.flush()
 
 
 def _release_gpu(dev_id: int) -> None:
-    """Release the lock for ``dev_id`` if it is held."""
-    lock = _GPU_LOCKS.pop(dev_id, None)
-    if lock is not None and lock.is_locked:
-        try:
-            lock.release()
-        except Exception:
-            pass
+    LEDGER_PATH.touch(exist_ok=True)
+    with open(LEDGER_PATH, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        ledger = _read_ledger(f)
+        ledger[str(dev_id)] = max(0, ledger.get(str(dev_id), 0) - reserved)
+        _write_ledger(f, ledger)
+        fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def _reserve_gpu(
@@ -57,21 +90,20 @@ def _reserve_gpu(
     check_interval: int | float = 1,
     recheck_interval: int | float = 60,
 ) -> int:
-    """Reserve a GPU with at least ``min_free_mem`` free bytes.
+    """Reserve a GPU with at least ``min_free_mem`` MB of free memory.
 
-    This function iterates over all visible CUDA devices in random order
-    and tries to acquire an exclusive lock for each one.  When a device is found that
-    satisfies the free memory constraint, it is set as the active device via
-    :func:`torch.cuda.set_device` and the lock is registered for cleanup via
-    :mod:`atexit`.
-
-    The previous behaviour of hiding other devices by setting the
-    ``CUDA_VISIBLE_DEVICES`` environment variable has been removed.
+    This function iterates over all visible CUDA devices in random order,
+    checks the free memory reported by ``torch.cuda.mem_get_info`` and the
+    current reservations from the ledger. When a device is found that
+    satisfies the free memory constraint, the reservation is recorded in
+    the ledger and the device is set as the active one via
+    :func:`torch.cuda.set_device`. The reservation is released when the
+    process exits.
 
     Parameters
     ----------
     min_free_mem:
-        The minimum amount of free memory in bytes required on the device.
+        The minimum amount of free memory in **MB** required on the device.
     lock_timeout:
         Maximum time in seconds to wait for a free GPU.  A value of ``0``
         means to retry indefinitely.
@@ -89,36 +121,38 @@ def _reserve_gpu(
     ------
     RuntimeError
         If no suitable GPU is found before ``lock_timeout`` expires.
+
     """
-
     import importlib
-
-    torch = importlib.import_module("torch")
 
     start = time.time()
     deadline = None if lock_timeout == 0 else start + lock_timeout
+
+    required_mem = int(min_free_mem)
 
     while True:
         dev_ids = list(range(torch.cuda.device_count()))
         random.shuffle(dev_ids)
         for dev_id in dev_ids:
-            lock = FileLock(str(_lock_path(dev_id)))
-            try:
-                lock.acquire(timeout=0)
-            except Timeout:
-                continue
+            free_mem_bytes, _ = torch.cuda.mem_get_info(dev_id)
+            free_mem_mb = free_mem_bytes // (1024**2)
 
-            try:
-                free_mem, _ = torch.cuda.mem_get_info(dev_id)
-                if free_mem >= min_free_mem:
+            LEDGER_PATH.touch(exist_ok=True)
+            with open(LEDGER_PATH, "r+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                ledger = _read_ledger(f)
+                used_mb = ledger.get(str(dev_id), 0)
+                available_mb = free_mem_mb - used_mb
+                if available_mb >= required_mem:
+                    ledger[str(dev_id)] = used_mb + required_mem
+                    _write_ledger(f, ledger)
+                    fcntl.flock(f, fcntl.LOCK_UN)
+
                     torch.cuda.set_device(dev_id)
-                    _GPU_LOCKS[dev_id] = lock
+                    _GPU_RESERVATIONS[dev_id] = required_mem
                     atexit.register(_release_gpu, dev_id)
                     return dev_id
-            finally:
-                # Release the lock if the device was not selected.
-                if dev_id not in _GPU_LOCKS:
-                    lock.release()
+                fcntl.flock(f, fcntl.LOCK_UN)
 
         if deadline is not None and time.time() > deadline:
             raise RuntimeError("No GPU with sufficient memory available")
