@@ -75,11 +75,19 @@ def _write_ledger(file_obj, data):
 
 
 def _release_gpu(dev_id: int) -> None:
+    reserved = _GPU_RESERVATIONS.pop(dev_id, 0)
+    if reserved == 0:
+        return
     LEDGER_PATH.touch(exist_ok=True)
     with open(LEDGER_PATH, "r+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         ledger = _read_ledger(f)
-        ledger[str(dev_id)] = max(0, ledger.get(str(dev_id), 0) - reserved)
+        current = ledger.get(str(dev_id), 0)
+        new_val = max(0, current - reserved)
+        if new_val:
+            ledger[str(dev_id)] = new_val
+        else:
+            ledger.pop(str(dev_id), None)
         _write_ledger(f, ledger)
         fcntl.flock(f, fcntl.LOCK_UN)
 
