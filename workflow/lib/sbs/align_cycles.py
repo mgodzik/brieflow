@@ -17,7 +17,7 @@ from lib.shared.align import (
 
 def align_seg_to_sbs(
     seg_stack,                  # (CHANNEL, Y, X) array for ONE segmentation image
-    ref_dapi,                   # (Y, X) array – the aligned SBS DAPI you trust
+    ref_dapi,                 # (Y, X) array – the aligned SBS DAPI you trust
     dapi_index=0,               # which channel inside seg_stack is DAPI
     upsample_factor=2,
     window=2,

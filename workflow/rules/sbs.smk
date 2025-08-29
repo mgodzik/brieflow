@@ -25,24 +25,24 @@ rule align_sbs:
 
 
 # Align external segmentation images to the SBS reference
-rule align_segmentation:
-    input:
-        lambda wildcards: output_to_input(
-            PREPROCESS_OUTPUTS["convert_segmentation"],
-            wildcards=wildcards,
-            metadata_combos=segmentation_wildcard_combos,
-            ancient_output=True,
-        ),
-        SBS_OUTPUTS["align_sbs"],
-    output:
-        SBS_OUTPUTS_MAPPED["align_segmentation"],
-    params:
-        dapi_cycle=config["sbs"]["dapi_cycle"],
-        dapi_index=config["sbs"]["dapi_index"],
-        upsample_factor=config["sbs"].get("segmentation_upsample_factor", 2),
-        window=config["sbs"].get("segmentation_window", 2),
-    script:
-        "../scripts/sbs/align_segmentation_to_sbs.py"
+#rule align_segmentation:
+#    input:
+#        lambda wildcards: output_to_input(
+#            PREPROCESS_OUTPUTS["convert_segmentation"],
+#            wildcards=wildcards,
+#            metadata_combos=segmentation_wildcard_combos,
+#            ancient_output=True,
+#        ),
+#        SBS_OUTPUTS["align_sbs"],
+#    output:
+#        SBS_OUTPUTS_MAPPED["align_segmentation"],
+#    params:
+#        dapi_cycle=config["sbs"]["dapi_cycle"],
+#        dapi_index=config["sbs"]["dapi_index"],
+#        upsample_factor=config["sbs"].get("segmentation_upsample_factor", 2),
+#        window=config["sbs"].get("segmentation_window", 2),
+#    script:
+#        "../scripts/sbs/align_segmentation_to_sbs.py"
 
 
 # Apply Laplacian-of-Gaussian filter to all channels
@@ -136,6 +136,7 @@ rule align_segmentation_to_sbs:
         SBS_OUTPUTS_MAPPED["align_segmentation"],
     params:
         dapi_index=config["sbs"]["dapi_index"],
+        dapi_cycle=config["sbs"]["dapi_cycle"],
         upsample_factor=config["sbs"].get("seg_align_upsample_factor", 2),
         window=config["sbs"].get("seg_align_window", 2),
     script:
@@ -161,9 +162,7 @@ rule segment_sbs:
     output:
         SBS_OUTPUTS_MAPPED["segment_sbs"],
     resources:
-        gpu_mem=lambda wildcards: config["sbs"].get("gpu_mem_per_job", 5)
-        if config["sbs"].get("gpu", False)
-        else 0,
+        gpu=1,
     params:
         config=lambda wildcards: get_segmentation_params("sbs", config),
     script:

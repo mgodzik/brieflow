@@ -66,6 +66,8 @@ rule deduplicate_merge:
         ancient(PHENOTYPE_OUTPUTS["merge_phenotype_cp"][1]),
     output:
         MERGE_OUTPUTS_MAPPED["deduplicate_merge"],
+    resources:
+        mem_mb=150000,
     script:
         "../scripts/merge/deduplicate_merge.py"
 
@@ -79,6 +81,9 @@ rule final_merge:
         ancient(PHENOTYPE_OUTPUTS["merge_phenotype_cp"][0]),
     output:
         MERGE_OUTPUTS_MAPPED["final_merge"],
+    resources:
+        # just to be safe increase resource assignment to prevent OOM
+        mem_mb=150000,
     script:
         "../scripts/merge/final_merge.py"
 

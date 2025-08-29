@@ -82,19 +82,14 @@ def _release_gpu(dev_id: int) -> None:
     with open(LEDGER_PATH, "r+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         ledger = _read_ledger(f)
-        current = ledger.get(str(dev_id), 0)
-        new_val = max(0, current - reserved)
-        if new_val:
-            ledger[str(dev_id)] = new_val
-        else:
-            ledger.pop(str(dev_id), None)
+        ledger[str(dev_id)] = max(0, ledger.get(str(dev_id), 0) - reserved)
         _write_ledger(f, ledger)
         fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def _reserve_gpu(
     min_free_mem: int = 0,
-    lock_timeout: int | float = 3600,
+    lock_timeout: int | float = 0,
     check_interval: int | float = 1,
     recheck_interval: int | float = 60,
 ) -> int:
@@ -136,8 +131,8 @@ def _reserve_gpu(
     start = time.time()
     deadline = None if lock_timeout == 0 else start + lock_timeout
 
-    required_mem = int(min_free_mem)
-
+    SAFETY_HEADROOM_MB = 2048 # add in extra 2Gb safety net to prevent OOM crashes
+    required_mem = int(min_free_mem) + SAFETY_HEADROOM_MB
     while True:
         dev_ids = list(range(torch.cuda.device_count()))
         random.shuffle(dev_ids)

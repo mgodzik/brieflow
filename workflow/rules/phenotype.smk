@@ -32,9 +32,7 @@ rule segment_phenotype:
     output:
         PHENOTYPE_OUTPUTS_MAPPED["segment_phenotype"],
     resources:
-        gpu_mem=lambda wildcards: config["phenotype"].get("gpu_mem_per_job", 5)
-        if config["phenotype"].get("gpu", False)
-        else 0,
+        gpu=1,
     params:
         config=lambda wildcards: get_segmentation_params("phenotype", config),
     script:

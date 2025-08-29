@@ -16,6 +16,14 @@ method = params.get("segmentation_method", "cellpose")
 
 
 
+# --- no-op if outputs already exist ---
+import os, sys
+from pathlib import Path
+outs = [str(p) for p in snakemake.output]
+if all(os.path.exists(p) for p in outs):
+    for p in outs: Path(p).touch()  # refresh mtime so downstream won’t rerun
+    sys.exit(0)
+    
 def perform_segmentation(gpu_flag):
     """Run the requested segmentation method."""
     segment_cells = params.get("segment_cells", True)
