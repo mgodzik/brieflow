@@ -15,7 +15,6 @@ from lib.shared.align import (
     filter_percentiles,
 )
 
-
 def align_cycles(
     image_data,
     channel_order=None,
@@ -28,7 +27,9 @@ def align_cycles(
     skip_cycles=None,
     manual_background_cycle=None,
     manual_channel_mapping=None,
+    manual_cycle_offsets=None,
     verbose=False,
+    tile_id=None,
 ):
     """Rigid alignment of sequencing cycles and channels.
 
@@ -63,9 +64,16 @@ def align_cycles(
             Example: [["DAPI", "G", "T", "A", "C"], ["DAPI", "G", "T", "A", "C"], ["DAPI", "GFP", "G", "T", "A", "C", "AF750"]]
             for a 3-cycle dataset where the third cycle has additional GFP and AF750 channels.
             Defaults to None.
+        manual_cycle_offsets (dict or None, optional): Dictionary mapping cycle indices to (dy, dx)
+            offset tuples for coarse pre-alignment. Applied BEFORE automatic fine alignment.
+            Example: {0: (0, 0), 1: (94, 38), 2: (-32, -27)} for 3 cycles with specified shifts.
+            Useful when automatic alignment fails due to large inter-cycle drift.
+            Defaults to None.
         verbose (bool, optional): If True, print detailed alignment information including
             calculated offsets for each cycle. Useful for debugging alignment issues.
             Defaults to False.
+        tile_id (str or None, optional): Optional identifier for the tile being processed.
+            Used in verbose output to distinguish between multiple tiles. Defaults to None.
 
     Returns:
         np.ndarray: SBS image aligned across cycles.
@@ -90,6 +98,35 @@ def align_cycles(
         print(
             f"Processing {len(processed_data)} cycles after skipping {len(skip_cycles)}"
         )
+
+    # Stage 1: Apply manual coarse offsets if provided (BEFORE automatic fine alignment)
+    if manual_cycle_offsets is not None:
+        if verbose:
+            print("Stage 1: Applying manual coarse cycle offsets...")
+        pre_aligned_data = []
+        for cycle_idx, img in enumerate(image_data):
+            # Map processed cycle index back to original if cycles were skipped
+            original_cycle_idx = cycle_idx
+            if skip_cycles:
+                # Count how many skipped cycles are before this processed index
+                for skip_idx in sorted(skip_cycles):
+                    if skip_idx <= original_cycle_idx:
+                        original_cycle_idx += 1
+
+            if original_cycle_idx in manual_cycle_offsets:
+                offset = manual_cycle_offsets[original_cycle_idx]
+                if verbose:
+                    print(f"  Cycle {original_cycle_idx}: applying offset {offset}")
+                # Apply the same offset to all channels in the cycle
+                n_channels = img.shape[0]
+                offsets_array = np.array([offset] * n_channels)
+                shifted_img = apply_offsets(img, offsets_array)
+                pre_aligned_data.append(shifted_img)
+            else:
+                pre_aligned_data.append(img)
+        image_data = pre_aligned_data
+        if verbose:
+            print("Stage 1 complete.")
 
     # Track the source cycle for extra channels (for proper offset application)
     extra_channel_source_cycle = None
@@ -264,9 +301,12 @@ def align_cycles(
             )
 
             if verbose:
-                print("\n=== Cycle Alignment Offsets (DAPI method) ===")
+                tile_str = f" [{tile_id}]" if tile_id else ""
+                print(f"\n=== Cycle Alignment Offsets (DAPI method){tile_str} ===")
                 for cycle_idx, offset in enumerate(offsets):
-                    print(f"  Cycle {cycle_idx}: shift = {offset} pixels (y, x)")
+                    print(
+                        f"  {tile_id} Cycle {cycle_idx}: shift = {offset} pixels (y, x)"
+                    )
         else:
             print(
                 "Warning: 'DAPI' method selected but DAPI channel not available. Switching to 'sbs_mean'."
@@ -289,9 +329,10 @@ def align_cycles(
         offsets = calculate_offsets(normed, upsample_factor=upsample_factor)
 
         if verbose:
-            print("\n=== Cycle Alignment Offsets (sbs_mean method) ===")
+            tile_str = f" [{tile_id}]" if tile_id else ""
+            print(f"\n=== Cycle Alignment Offsets (sbs_mean method){tile_str} ===")
             for cycle_idx, offset in enumerate(offsets):
-                print(f"  Cycle {cycle_idx}: shift = {offset} pixels (y, x)")
+                print(f"  {tile_id} Cycle {cycle_idx}: shift = {offset} pixels (y, x)")
 
         # Apply cycle offsets conditionally based on channel type
         for channel in range(aligned.shape[1]):
@@ -311,10 +352,410 @@ def align_cycles(
             else:
                 # Base channels: apply cycle-specific offsets
                 aligned[:, channel] = apply_offsets(aligned[:, channel], offsets)
+
+    elif method == "sbs_mean_rotation":
+        # Calculate cycle offsets WITH ROTATION using log-polar transform
+        # Same as sbs_mean but also detects and corrects small rotations
+        if base_indices:
+            sbs_channels = base_indices
+        else:
+            print(
+                "Warning: No base channels found for 'sbs_mean_rotation' method. Using all channels."
+            )
+            sbs_channels = list(range(aligned.shape[1]))
+
+        # Create max projection - FULL image for rotation, WINDOWED for translation
+        full_projection = aligned[:, sbs_channels].max(axis=1)
+        windowed_projection = apply_window(full_projection, window=window)
+
+        # Normalize both
+        full_normed = normalize_by_percentile(full_projection, q_norm=q_norm)
+        full_normed[full_normed > cutoff] = cutoff
+
+        windowed_normed = normalize_by_percentile(windowed_projection, q_norm=q_norm)
+        windowed_normed[windowed_normed > cutoff] = cutoff
+
+        # Calculate rotation AND translation offsets
+        # - Translation uses WINDOWED data (center region, avoids edge artifacts)
+        # - Rotation uses FULL image (edges have most rotation signal)
+        angles, offsets = calculate_rotation_and_translation_offsets(
+            data_full=full_normed,
+            data_windowed=windowed_normed,
+            upsample_factor=upsample_factor,
+            max_rotation=5.0,
+        )
+
+        if verbose:
+            tile_str = f" [{tile_id}]" if tile_id else ""
+            print(
+                f"\n=== Cycle Alignment Offsets (sbs_mean_rotation method){tile_str} ==="
+            )
+            for cycle_idx, (angle, offset) in enumerate(zip(angles, offsets)):
+                print(
+                    f"  {tile_id} Cycle {cycle_idx}: rotation = {angle:.3f}°, shift = {offset} pixels (y, x)"
+                )
+
+        # Apply rotation + translation to all channels
+        for channel in range(aligned.shape[1]):
+            if channel in extra_indices and extra_channel_source_cycle is not None:
+                # Extra channels: use ONLY the transform from the cycle they were acquired in
+                source_angles = np.array(
+                    [angles[extra_channel_source_cycle]] * aligned.shape[0]
+                )
+                source_offsets = np.array(
+                    [offsets[extra_channel_source_cycle]] * aligned.shape[0]
+                )
+                aligned[:, channel] = apply_rotation_and_translation(
+                    aligned[:, channel], source_angles, source_offsets
+                )
+                if channel == extra_indices[0]:
+                    print(
+                        f"Applying source cycle {extra_channel_source_cycle} transform to {len(extra_indices)} extra channel(s)"
+                    )
+            else:
+                # Base channels: apply cycle-specific transforms
+                aligned[:, channel] = apply_rotation_and_translation(
+                    aligned[:, channel], angles, offsets
+                )
+
+    elif method == "dapi_rotation":
+        # DAPI edge-based rotation alignment
+        # Uses Canny edges which are robust to intensity changes/saturation
+        if extra_indices:
+            dapi_channel = extra_indices[0]  # Assume first extra channel is DAPI
+        else:
+            print(
+                "Warning: No extra channels found for 'dapi_rotation'. Using channel 0."
+            )
+            dapi_channel = 0
+
+        # Extract DAPI channel across all cycles
+        dapi_data = aligned[:, dapi_channel]
+
+        # Calculate rotation + translation using edge detection
+        angles, offsets = calculate_dapi_edge_offsets(
+            dapi_data, upsample_factor=upsample_factor, max_rotation=5.0, edge_sigma=2.0
+        )
+
+        if verbose:
+            tile_str = f" [{tile_id}]" if tile_id else ""
+            print(f"\n=== Cycle Alignment Offsets (dapi_rotation method){tile_str} ===")
+            for cycle_idx, (angle, offset) in enumerate(zip(angles, offsets)):
+                print(
+                    f"  {tile_id} Cycle {cycle_idx}: rotation = {angle:.3f}°, shift = {offset} pixels (y, x)"
+                )
+
+        # Apply rotation + translation to all channels
+        for channel in range(aligned.shape[1]):
+            aligned[:, channel] = apply_rotation_and_translation(
+                aligned[:, channel], angles, offsets
+            )
+
     else:
         raise ValueError(f'Method "{method}" not implemented')
 
     return aligned
+
+            # Keep only channels in common across all 
+# def align_cycles(
+#     image_data,
+#     channel_order=None,
+#     method=None,
+#     upsample_factor=2,
+#     window=2,
+#     cutoff=1,
+#     q_norm=70,
+#     use_align_within_cycle=True,
+#     skip_cycles=None,
+#     manual_background_cycle=None,
+#     manual_channel_mapping=None,
+#     verbose=False,
+# ):
+#     """Rigid alignment of sequencing cycles and channels.
+
+#     Args:
+#         image_data (np.ndarray or list of np.ndarray): Unaligned SBS image with dimensions
+#             (CYCLE, CHANNEL, I, J) or list of single cycle SBS images, each with dimensions
+#             (CHANNEL, I, J).
+#         channel_order (list[str], optional): List of channel names in the order they are acquired.
+#             Example: ["DAPI", "G", "T", "A", "C"]. If None, will assume first channel is DAPI
+#             and remaining are bases. Defaults to None.
+#         method (str, optional): Method to use for alignment. Options are {'DAPI', 'sbs_mean'}.
+#             If None, will automatically select based on available channels. Defaults to None.
+#         upsample_factor (int, optional): Subpixel alignment is done if greater than one
+#             (can be slow). Defaults to 2.
+#         window (int or float, optional): A centered subset of data is used if greater than one.
+#             Defaults to 2.
+#         cutoff (int or float, optional): Cutoff for normalized data to help deal with noise in
+#             images. Defaults to 1.
+#         q_norm (int, optional): Quantile for normalization to help deal with noise in images.
+#             Defaults to 70.
+#         use_align_within_cycle (bool, optional): Align SBS channels within cycles. Defaults to True.
+#         skip_cycles (list[int] or None, optional): List of cycle indices to skip (0-based).
+#             These cycles will be completely excluded from alignment. Defaults to None.
+#         manual_background_cycle (int or None, optional): Specific cycle to use for
+#             background channel (0-based). Must be specified by user if needed.
+#             Defaults to None. If not specified, and extra channels are present,
+#             the cycle with the most extra channels will be used as the source for
+#             propagating extra channels across cycles. Only used if shapes vary across cycles.
+#         manual_channel_mapping (list or None, optional): List of channel orders for each cycle.
+#             Each element should be a list of channel names in the order they appear in that cycle's data.
+#             If provided, this will override automatic channel detection and enable smart channel filling.
+#             Example: [["DAPI", "G", "T", "A", "C"], ["DAPI", "G", "T", "A", "C"], ["DAPI", "GFP", "G", "T", "A", "C", "AF750"]]
+#             for a 3-cycle dataset where the third cycle has additional GFP and AF750 channels.
+#             Defaults to None.
+#         verbose (bool, optional): If True, print detailed alignment information including
+#             calculated offsets for each cycle. Useful for debugging alignment issues.
+#             Defaults to False.
+
+#     Returns:
+#         np.ndarray: SBS image aligned across cycles.
+#     """
+#     skip_cycles = skip_cycles or []
+
+#     # Handle cycle skipping
+#     if skip_cycles:
+#         print(f"Skipping cycles: {skip_cycles} out of {len(image_data)} total cycles")
+#         processed_data = []
+
+#         for i, data in enumerate(image_data):
+#             if i in skip_cycles:
+#                 print(f"Skipping cycle {i} with shape {data.shape}")
+#             else:
+#                 processed_data.append(data)
+
+#         if len(processed_data) == 0:
+#             raise ValueError("All cycles were skipped - no data to process")
+
+#         image_data = processed_data
+#         print(
+#             f"Processing {len(processed_data)} cycles after skipping {len(skip_cycles)}"
+#         )
+
+#     # Track the source cycle for extra channels (for proper offset application)
+#     extra_channel_source_cycle = None
+
+#     # Handle manual channel mapping if provided
+#     if manual_channel_mapping is not None:
+#         # Use user-specified channel mapping
+#         stacked = manual_fill_channels(
+#             image_data,
+#             current_channel_orders=manual_channel_mapping,
+#             target_channel_order=channel_order,
+#             fill_method="smart",
+#             source_cycle_priority=[manual_background_cycle]
+#             if manual_background_cycle is not None
+#             else None,
+#         )
+
+#         # Define base_indices for the target channel order
+#         base_channels = ["G", "T", "A", "C"]
+#         base_indices = [i for i, ch in enumerate(channel_order) if ch in base_channels]
+#         extra_indices = [
+#             i for i, ch in enumerate(channel_order) if ch not in base_channels
+#         ]
+
+#         # Track source cycle for extra channels
+#         if manual_background_cycle is not None:
+#             extra_channel_source_cycle = manual_background_cycle
+
+#         # Set method if not provided
+#         if method is None:
+#             method = (
+#                 "DAPI" if channel_order and channel_order[0] == "DAPI" else "sbs_mean"
+#             )
+#             print(f"Method not provided. Using '{method}' for manual channel mapping.")
+
+#     # If no manual mapping is provided, determine channel structure automatically
+#     else:
+#         # Determine the channel structure
+#         base_channels = ["G", "T", "A", "C"]
+#         if channel_order is None:
+#             if isinstance(image_data, list):
+#                 n_channels = min(x.shape[-3] if x.ndim > 2 else 1 for x in image_data)
+#             else:
+#                 n_channels = image_data.shape[1]
+
+#             channel_order = (
+#                 ["DAPI"] + base_channels[: n_channels - 1]
+#                 if n_channels > 1
+#                 else ["DAPI"]
+#             )
+
+#         # Identify base channels and extra channels
+#         base_indices = [i for i, ch in enumerate(channel_order) if ch in base_channels]
+#         extra_indices = [
+#             i for i, ch in enumerate(channel_order) if ch not in base_channels
+#         ]
+
+#         # Handle channel inconsistencies - simplified approach
+#         if not all(x.shape == image_data[0].shape for x in image_data):
+#             print("Warning: Number of channels varies across cycles.")
+
+#             # Keep only channels in common across all cycles
+#             channels = [x.shape[-3] if x.ndim > 2 else 1 for x in image_data]
+#             min_channels = min(channels)
+#             print(f"Channel counts: {channels}, using minimum: {min_channels}")
+
+#             stacked = np.array([x[-min_channels:] for x in image_data])
+
+#             # Automatically add back extra channels (propagate to all cycles)
+#             extras = np.array(channels) - min_channels
+#             if any(extras > 0):
+#                 print("Propagating extra channels to all cycles...")
+#                 arr = []
+
+#                 # Find the cycle with extra channels (manual_background_cycle or cycle with most extras)
+#                 source_cycle_idx = None
+#                 if manual_background_cycle is not None:
+#                     # Convert to processed cycle index after skipping
+#                     adjusted_idx = manual_background_cycle
+#                     for skip_idx in sorted(skip_cycles):
+#                         if skip_idx <= manual_background_cycle:
+#                             adjusted_idx -= 1
+#                     if 0 <= adjusted_idx < len(image_data) and extras[adjusted_idx] > 0:
+#                         source_cycle_idx = adjusted_idx
+#                         print(
+#                             f"Using user-specified segmentation background cycle {manual_background_cycle} (processed index {adjusted_idx})"
+#                         )
+
+#                 if source_cycle_idx is None:
+#                     # Find cycle with the most extra channels
+#                     max_extra_cycle = np.argmax(extras)
+#                     if extras[max_extra_cycle] > 0:
+#                         source_cycle_idx = max_extra_cycle
+#                         print(
+#                             f"Auto-selected cycle {max_extra_cycle} as source (has {extras[max_extra_cycle]} extra channels)"
+#                         )
+
+#                 if source_cycle_idx is not None:
+#                     # Get ALL extra channels from the source cycle
+#                     for extra_ch in range(int(extras[source_cycle_idx])):
+#                         arr.append(image_data[source_cycle_idx][extra_ch])
+
+#                     propagate = np.array(arr)
+#                     print(
+#                         f"Propagating {len(arr)} extra channels with shapes: {[ch.shape for ch in arr]}"
+#                     )
+
+#                     # Add extra channels to the beginning of all cycles
+#                     stacked = np.concatenate(
+#                         (np.array([propagate] * stacked.shape[0]), stacked), axis=1
+#                     )
+
+#                     # Track the source cycle for proper offset application later
+#                     extra_channel_source_cycle = source_cycle_idx
+#         else:
+#             # All cycles have the same number of channels
+#             stacked = (
+#                 np.array(image_data) if isinstance(image_data, list) else image_data
+#             )
+
+#         # Debug print before final stacking
+#         print(f"Final stacked shape before alignment: {stacked.shape}")
+
+#         assert stacked.ndim == 4, (
+#             "Input image_data must have dimensions CYCLE, CHANNEL, I, J"
+#         )
+
+#         # Automatically determine method if not provided
+#         if method is None:
+#             # Use DAPI if we have consistent channels, sbs_mean if inconsistent
+#             if all(x.shape == image_data[0].shape for x in image_data):
+#                 method = "DAPI"
+#             else:
+#                 method = "sbs_mean"
+#             print(
+#                 f"Method not provided. Using '{method}' for alignment based on data structure."
+#             )
+
+#     # Align between SBS channels for each cycle
+#     aligned = stacked.copy()
+
+#     if use_align_within_cycle and base_indices:
+#         # Only align base channels within cycle
+#         min_base_idx = min(base_indices)
+#         base_slices = (
+#             slice(min_base_idx, None)
+#             if all(i >= min_base_idx for i in base_indices)
+#             else base_indices
+#         )
+
+#         def align_it(x):
+#             return align_within_cycle(x, window=window, upsample_factor=upsample_factor)
+
+#         aligned[:, base_slices] = np.array(
+#             [align_it(x) for x in aligned[:, base_slices]]
+#         )
+
+#     # Align between cycles
+#     if method == "DAPI":
+#         # Only attempt DAPI alignment if DAPI channel exists
+#         if 0 in range(aligned.shape[1]) and (
+#             channel_order is None or channel_order[0] == "DAPI"
+#         ):
+#             dapi_index = 0
+#             # Align cycles using the DAPI channel
+#             aligned, offsets = align_between_cycles(
+#                 aligned,
+#                 channel_index=dapi_index,
+#                 window=window,
+#                 upsample_factor=upsample_factor,
+#                 return_offsets=True,
+#             )
+
+#             if verbose:
+#                 print("\n=== Cycle Alignment Offsets (DAPI method) ===")
+#                 for cycle_idx, offset in enumerate(offsets):
+#                     print(f"  Cycle {cycle_idx}: shift = {offset} pixels (y, x)")
+#         else:
+#             print(
+#                 "Warning: 'DAPI' method selected but DAPI channel not available. Switching to 'sbs_mean'."
+#             )
+#             method = "sbs_mean"  # Fall back to sbs_mean method
+
+#     elif method == "sbs_mean":
+#         # Calculate cycle offsets using ONLY the base channels (ignore extra channels)
+#         if base_indices:
+#             sbs_channels = base_indices
+#         else:
+#             print(
+#                 "Warning: No base channels found for 'sbs_mean' method. Using all channels."
+#             )
+#             sbs_channels = list(range(aligned.shape[1]))
+
+#         target = apply_window(aligned[:, sbs_channels], window=window).max(axis=1)
+#         normed = normalize_by_percentile(target, q_norm=q_norm)
+#         normed[normed > cutoff] = cutoff
+#         offsets = calculate_offsets(normed, upsample_factor=upsample_factor)
+
+#         if verbose:
+#             print("\n=== Cycle Alignment Offsets (sbs_mean method) ===")
+#             for cycle_idx, offset in enumerate(offsets):
+#                 print(f"  Cycle {cycle_idx}: shift = {offset} pixels (y, x)")
+
+#         # Apply cycle offsets conditionally based on channel type
+#         for channel in range(aligned.shape[1]):
+#             if channel in extra_indices and extra_channel_source_cycle is not None:
+#                 # Extra channels: use ONLY the offset from the cycle they were acquired in
+#                 # This prevents misalignment when the same image is propagated across cycles
+#                 source_offset = np.array(
+#                     [offsets[extra_channel_source_cycle]] * aligned.shape[0]
+#                 )
+#                 aligned[:, channel] = apply_offsets(aligned[:, channel], source_offset)
+#                 if (
+#                     channel == extra_indices[0]
+#                 ):  # Print once for the first extra channel
+#                     print(
+#                         f"Applying source cycle {extra_channel_source_cycle} offset to {len(extra_indices)} extra channel(s)"
+#                     )
+#             else:
+#                 # Base channels: apply cycle-specific offsets
+#                 aligned[:, channel] = apply_offsets(aligned[:, channel], offsets)
+#     else:
+#         raise ValueError(f'Method "{method}" not implemented')
+
+#     return aligned
 
 
 def align_within_cycle(data_, upsample_factor=4, window=1, q1=0, q2=90):

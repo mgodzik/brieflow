@@ -170,12 +170,29 @@ def get_sample_fps(
 
     # If no rounds specified but we have channels and channel order
     if "channel" in filtered_df.columns and channel_order is not None:
-        channel_to_file = dict(zip(filtered_df["channel"], filtered_df["sample_fp"]))
-        result = [
-            channel_to_file[channel]
-            for channel in channel_order
-            if channel in channel_to_file
+        channel_df = filtered_df.assign(_channel_key=filtered_df["channel"].astype(str))
+        channel_groups = {
+            channel: group for channel, group in channel_df.groupby("_channel_key")
+        }
+        requested_channels = [str(channel) for channel in channel_order]
+        missing_channels = [
+            channel for channel in requested_channels if channel not in channel_groups
         ]
+        if missing_channels:
+            available_channels = sorted(channel_groups.keys())
+            raise ValueError(
+                "Requested channel_order contains channels not found in samples: "
+                f"{missing_channels}. Available channels: {available_channels}"
+            )
+
+        result = []
+        for channel in requested_channels:
+            channel_group = channel_groups[channel]
+            if "z" in channel_group.columns and z is None:
+                result.extend(channel_group.sort_values("z")["sample_fp"].tolist())
+            else:
+                result.append(channel_group["sample_fp"].iloc[0])
+
         # Return single string if input was single value and result is single file
         if channel_was_single and len(result) == 1:
             return result[0]

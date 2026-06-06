@@ -20,7 +20,7 @@ import gc
 
 # Data organization and format constants
 DATA_FORMATS = {"nd2", "tiff"}
-DATA_ORGANIZATIONS = {"tile", "well"}
+DATA_ORGANIZATIONS = {"tile", "well", "channel"}
 
 
 def get_data_config(image_type: str, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -33,7 +33,7 @@ def get_data_config(image_type: str, config: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Dictionary with data configuration settings including:
         - data_format: 'nd2' or 'tiff'
-        - data_organization: 'tile' or 'well'
+        - data_organization: 'tile', 'well', or 'channel'
         - channel_order_flip: Whether to reverse channel order
         - channel_order: List of channels in desired order
         - metadata_samples_df_fp: Path to metadata samples dataframe
@@ -44,10 +44,17 @@ def get_data_config(image_type: str, config: Dict[str, Any]) -> Dict[str, Any]:
     data_format = base_config.get(f"{image_type}_data_format", "nd2")
     data_org = base_config.get(f"{image_type}_data_organization", "tile")
 
+    if data_format == "tiff":
+        image_data_org = "channel" if data_org == "channel" else "tile"
+        metadata_data_org = "well"
+    else:
+        image_data_org = data_org
+        metadata_data_org = data_org
+
     return {
         "data_format": data_format,
-        "image_data_organization": "tile" if data_format == "tiff" else data_org,
-        "metadata_data_organization": "well" if data_format == "tiff" else data_org,
+        "image_data_organization": image_data_org,
+        "metadata_data_organization": metadata_data_org,
         "channel_order_flip": base_config.get(
             f"{image_type}_channel_order_flip", False
         ),
@@ -906,7 +913,8 @@ def extract_metadata(
         cycle: Optional cycle number for SBS imaging
         round: Optional round number for multiplexed imaging
         data_format: 'nd2' or 'tiff'
-        data_organization: 'tile' (one FOV per file) or 'well' (multiple FOVs per file)
+        data_organization: 'tile' (one FOV per file), 'well' (multiple FOVs per file),
+            or 'channel' (one channel plane per file)
         metadata_file_path: Path to external metadata CSV/TSV (for TIFF)
         verbose: Print debug information
 
@@ -975,8 +983,11 @@ def extract_metadata(
 
             return extract_metadata_well_nd2(**kwargs)
 
+        elif data_organization == "channel":
+            raise ValueError("Channel organization is only supported for TIFF inputs")
+
     elif data_format == "tiff":
-        # For TIFF, always treat as tile-based for now
+        # TIFF channel organization is metadata-equivalent to tile organization.
         metadata_dfs = []
         for i, file_path in enumerate(file_paths):
             current_tile = tile if tile is not None else i
@@ -1019,7 +1030,8 @@ def convert_to_array(
     Args:
         files: Path(s) to image file(s)
         data_format: 'nd2' or 'tiff'
-        data_organization: 'tile' (one FOV per file) or 'well' (multiple FOVs per file)
+        data_organization: 'tile' (one FOV per file), 'well' (multiple FOVs per file),
+            or 'channel' (one channel plane per file)
         position: Position/tile to extract (required for well organization)
         channel_order_flip: Reverse the order of channels
         verbose: Print debug information
@@ -1055,6 +1067,8 @@ def convert_to_array(
             return convert_nd2_to_array_well(
                 files, position, channel_order_flip, verbose=verbose, **kwargs
             )
+        elif data_organization == "channel":
+            raise ValueError("Channel organization is only supported for TIFF inputs")
 
     elif data_format == "tiff":
         return convert_tiff_to_array(
@@ -1085,7 +1099,7 @@ def get_expansion_values(
     image_org = data_config.get("image_data_organization", "tile")
 
     # Base expansion values based on organization
-    if image_org == "tile":
+    if image_org in {"tile", "channel"}:
         if image_type == "sbs":
             base_expansion = ["tile", "cycle"]
         else:  # phenotype
@@ -1141,7 +1155,7 @@ def include_tile_in_input(
     """
     data_config = get_data_config(image_type, config)
     key = "metadata_data_organization" if for_metadata else "image_data_organization"
-    return data_config[key] == "tile"
+    return data_config[key] in {"tile", "channel"}
 
 
 def update_config_for_unified_processing(config: dict) -> dict:

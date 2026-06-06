@@ -7,20 +7,20 @@
 all:
   root_fp: brieflow_output/
 preprocess:
-  sbs_data_format: nd2
+  sbs_data_format: tiff
   sbs_data_organization: tile
   sbs_n_z_planes: null
   phenotype_data_format: nd2
   phenotype_data_organization: tile
   phenotype_n_z_planes: null
   phenotype_channel_order: null
-  phenotype_channel_order_flip: true
+  phenotype_channel_order_flip: false
   phenotype_combo_fp: config/phenotype_combo.tsv
   phenotype_round_order: null
   phenotype_samples_fp: config/phenotype_samples.tsv
-  sample_fraction: 1
+  sample_fraction: 0.001
   sbs_channel_order: null
-  sbs_channel_order_flip: true
+  sbs_channel_order_flip: false
   sbs_combo_fp: config/sbs_combo.tsv
   sbs_samples_fp: config/sbs_samples.tsv
 sbs:
@@ -42,8 +42,8 @@ sbs:
   spot_detection_method: standard
   dapi_cycle: 1
   dapi_cycle_index: 0
-  cyto_cycle: 11
-  cyto_cycle_index: 10
+  cyto_cycle: 1
+  cyto_cycle_index: 0
   dapi_index: 0
   cyto_index: 4
   segmentation_method: cellpose
@@ -81,14 +81,15 @@ phenotype:
   cell_diameter: 53.075815293046055
   cellprob_threshold: 0
   channel_names:
-  - DAPI
-  - COXIV
-  - CENPA
+  - GPX4
+  - mNeonGreen
+  - GPX4_FISH
+  - MitoTracker
   - WGA
   cp_method: cp_emulator
-  cyto_index: 1
+  cyto_index: 4
   cellpose_model: cyto3
-  dapi_index: 0
+  dapi_index: 1
   flow_threshold: 0.4
   foci_channel_index: 2
   gpu: false

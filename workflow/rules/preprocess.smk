@@ -121,7 +121,7 @@ rule calculate_ic_sbs:
     output:
         PREPROCESS_OUTPUTS_MAPPED["calculate_ic_sbs"],
     params:
-        threading=True,
+        threading=False,
         sample_fraction=config["preprocess"]["sample_fraction"],
     script:
         "../scripts/preprocess/calculate_ic_field.py"

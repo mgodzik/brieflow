@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Run only the preprocess rules
-snakemake --use-conda --cores all \
+snakemake --use-conda --cores 1 \
     --snakefile "../../workflow/Snakefile" \
     --configfile "config/config.yml" \
     --rerun-triggers mtime \
