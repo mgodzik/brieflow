@@ -31,6 +31,8 @@ def call_reads(
     correction_only_in_cells=True,
     normalize_bases_first=True,
     method="median",
+    gt_raw_threshold=None,
+    cycle1_ct_from_raw=False,
 ):
     """Call reads for in situ sequencing data.
 
@@ -132,6 +134,73 @@ def call_reads(
         i, j = df_reads[["i", "j"]].values.T
         df_reads["peak"] = peaks_data[i, j]
 
+    # GPX4 pilot: optional minimal raw G/T recall (see _recall_gt_from_raw).
+    # Off by default -> stock behavior is byte-identical.
+    if gt_raw_threshold is not None and len(df_reads) > 0:
+        df_reads = _recall_gt_from_raw(
+            df_reads, bases_data, gt_raw_threshold, cycle1_ct_from_raw
+        )
+
+    return df_reads
+
+
+def _recall_gt_from_raw(df_reads, bases_data, threshold, cycle1_ct_from_raw=False):
+    """Re-decide G-vs-T base calls from the raw (uncorrected) G/(G+T) ratio.
+
+    brieflow's median crosstalk correction systematically over-calls G: in the
+    GPX4 pilot every observed G/T flip was G->T, and re-drawing the G/T boundary
+    on the raw intensity ratio recovered the mis-called T and raised the exact
+    mapping rate several-fold. This ONLY rewrites positions currently called G
+    or T; A and C calls are left exactly as the stock pipeline produced them,
+    and quality scores are unchanged.
+
+    Args:
+        df_reads: output of the stock read-calling path (has BARCODE, READ).
+        bases_data: the extract_bases table passed into call_reads (raw
+            per-cycle/per-channel intensities).
+        threshold: keep G only if raw G/(G+T) >= threshold, else call T
+            (0.55-0.60 validated range on the GPX4 pilot).
+        cycle1_ct_from_raw: if True, cycle 1 is decided C-vs-T from raw
+            intensity (library position 1 is C/T only in this design).
+
+    Returns:
+        df_reads with the BARCODE column rewritten in place.
+    """
+    b_bases = sorted(set(bases_data[CHANNEL]))
+    if "G" not in b_bases or "T" not in b_bases:
+        return df_reads
+    n_ch = len(b_bases)
+    cyc_sorted = sorted(set(bases_data[CYCLE]))
+    n_cyc = len(cyc_sorted)
+
+    # Raw intensity tensor [n_reads, n_cyc, n_ch], sorted read->cycle->channel,
+    # reindexed to df_reads order (mirrors the validated pilot reconstruction).
+    sub = bases_data.sort_values([READ, CYCLE, CHANNEL])
+    reads = sub[READ].drop_duplicates().values
+    if len(sub) != len(reads) * n_cyc * n_ch:
+        return df_reads  # irregular tensor -> keep stock calls
+    raw = sub[INTENSITY].values.reshape(len(reads), n_cyc, n_ch).astype(float)
+    row_of = pd.Series(np.arange(len(reads)), index=reads)
+    take = row_of.reindex(df_reads[READ].values).values
+    if pd.isna(take).any():
+        return df_reads
+    raw = raw[take.astype(int)]
+
+    iG, iT = b_bases.index("G"), b_bases.index("T")
+    iC = b_bases.index("C") if "C" in b_bases else None
+    bc = np.array([list(x) for x in df_reads[BARCODE].values])
+    n_pos = min(bc.shape[1], n_cyc)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        for pos in range(n_pos):
+            g = raw[:, pos, iG]
+            t = raw[:, pos, iT]
+            denom = g + t
+            gfrac = np.where(denom > 0, g / denom, 0.5)
+            is_gt = np.isin(bc[:, pos], ["G", "T"])
+            bc[is_gt, pos] = np.where(gfrac[is_gt] >= threshold, "G", "T")
+        if cycle1_ct_from_raw and iC is not None and n_pos > 0:
+            bc[:, 0] = np.where(raw[:, 0, iC] >= raw[:, 0, iT], "C", "T")
+    df_reads[BARCODE] = ["".join(r) for r in bc]
     return df_reads
 
 
