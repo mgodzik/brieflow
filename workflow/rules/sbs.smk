@@ -145,7 +145,9 @@ rule call_reads:
     output:
         SBS_OUTPUTS_MAPPED["call_reads"],
     params:
-        call_reads_method=config["sbs"]["call_reads_method"]
+        call_reads_method=config["sbs"]["call_reads_method"],
+        gt_raw_threshold=config["sbs"].get("gt_raw_threshold", 0.55),
+        cycle1_ct_from_raw=config["sbs"].get("cycle1_ct_from_raw", True),
     script:
         "../scripts/sbs/call_reads.py"
 
